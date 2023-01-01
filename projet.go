@@ -2,7 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -31,12 +36,22 @@ type registerJson struct {
 }
 
 func main() {
-	var rootMsg []byte
+	// var rootMsg []byte
 	var helloMsg []byte
 	name := "com2"
 	username := []byte(name)
 	id := []byte{34, 122, 76, 97}
 	length := 9
+
+	// Private and Public key
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	publicKey, ok := privateKey.Public().(*ecdsa.PublicKey)
+	fmt.Println(ok)
+	formatted := make([]byte, 64)
+	publicKey.X.FillBytes(formatted[:32])
+	publicKey.Y.FillBytes(formatted[32:])
+	keyBase64 := base64.RawStdEncoding.EncodeToString(formatted)
+	fmt.Println(keyBase64)
 
 	transport := &*http.DefaultTransport.(*http.Transport)
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -56,7 +71,7 @@ func main() {
 
 	fmt.Println(udpServerAddresses)
 
-	nameKey := []byte(fmt.Sprintf(`{"name":"%s"}`, name))
+	nameKey := []byte(fmt.Sprintf(`{"name":"%s", "key":"%s"}`, name, keyBase64))
 
 	// nameKey := strings.NewReader(`{"name": "computer1"}`)
 
@@ -65,10 +80,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, err = client.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	fmt.Println(res)
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
 	// send hello to SERVER
@@ -84,7 +101,16 @@ func main() {
 	}
 
 	helloMsg = buildDatagram(id, username, nil, 0, length)
+	fmt.Println(helloMsg[:7+length])
+	hashed := sha256.Sum256(helloMsg[0 : 7+length])
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
+	signature := make([]byte, 64)
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
 
+	copy(helloMsg[7+length:], signature)
+
+	helloMsg = helloMsg[:64+7+length]
 	if !recievedHelloReply(helloMsg, id, sockIpv4, udpServerAddresses[0]) {
 		fmt.Println("Didn't receive helloReply from server (IPV4)")
 		return
@@ -112,60 +138,60 @@ func main() {
 
 	replyAllPeers(username, length, sockIpv6, udpServerAddresses[1])
 
-	/////////////////////////////////////////////////////////////////////////////////////////////////////
-	// send hello to peer
+	// /////////////////////////////////////////////////////////////////////////////////////////////////////
+	// // send hello to peer
 
-	body = getRequest(client, "https://jch.irif.fr:8443/peers")
+	// body = getRequest(client, "https://jch.irif.fr:8443/peers")
 
-	fmt.Println(string(body))
+	// fmt.Println(string(body))
 
-	body = getRequest(client, "https://jch.irif.fr:8443/peers/jch")
+	// body = getRequest(client, "https://jch.irif.fr:8443/peers/jch")
 
-	var peerInfo peerInfoJson
-	if err := json.Unmarshal(body, &peerInfo); err != nil {
-		log.Fatal(err)
-	}
+	// var peerInfo peerInfoJson
+	// if err := json.Unmarshal(body, &peerInfo); err != nil {
+	// 	log.Fatal(err)
+	// }
 
-	peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
+	// peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
 
-	// IPV4
+	// // IPV4
 
-	helloMsg = buildDatagram(id, username, nil, 0, length)
+	// helloMsg = buildDatagram(id, username, nil, 0, length)
 
-	if !recievedHelloReply(helloMsg, id, sockIpv4, peerUdpAddresses[0]) {
-		fmt.Println("Didn't receive helloReply from jch (IPV4)")
-		return
-	}
+	// if !recievedHelloReply(helloMsg, id, sockIpv4, peerUdpAddresses[0]) {
+	// 	fmt.Println("Didn't receive helloReply from jch (IPV4)")
+	// 	return
+	// }
 
-	replyAllPeers(username, length, sockIpv4, peerUdpAddresses[0])
+	// replyAllPeers(username, length, sockIpv4, peerUdpAddresses[0])
 
-	// IPV6
+	// // IPV6
 
-	helloMsg = buildDatagram(id, username, nil, 0, length)
+	// helloMsg = buildDatagram(id, username, nil, 0, length)
 
-	if !recievedHelloReply(helloMsg, id, sockIpv6, peerUdpAddresses[1]) {
-		fmt.Println("Didn't receive helloReply from jch (IPV6)")
-		return
-	}
+	// if !recievedHelloReply(helloMsg, id, sockIpv6, peerUdpAddresses[1]) {
+	// 	fmt.Println("Didn't receive helloReply from jch (IPV6)")
+	// 	return
+	// }
 
-	replyAllPeers(username, length, sockIpv6, peerUdpAddresses[1])
+	// replyAllPeers(username, length, sockIpv6, peerUdpAddresses[1])
 
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// send RootRequest
-	rootMsg = buildDatagram(id, nil, nil, 1, 0)
+	// //////////////////////////////////////////////////////////////////////////////////////////////
+	// // send RootRequest
+	// rootMsg = buildDatagram(id, nil, nil, 1, 0)
 
-	if !recieveRoot(rootMsg, id, sockIpv4, peerUdpAddresses[0]) {
-		fmt.Println("Didn't receive helloReply from jch (IPV6)")
-		return
-	}
+	// if !recieveRoot(rootMsg, id, sockIpv4, peerUdpAddresses[0]) {
+	// 	fmt.Println("Didn't receive helloReply from jch (IPV6)")
+	// 	return
+	// }
 
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// send Datum
+	// //////////////////////////////////////////////////////////////////////////////////////////////
+	// // send Datum
 
-	recursiveMircle(peerUdpAddresses[0], sockIpv4, rootMsg[7:39], id)
+	// recursiveMircle(peerUdpAddresses[0], sockIpv4, rootMsg[7:39], id)
 
-	///////////////////////////////////////////////////////
-	// NAT
+	// ///////////////////////////////////////////////////////
+	// // NAT
 
 }
 
@@ -267,11 +293,9 @@ func recievedHelloReply(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddres
 			return false
 		}
 
-		fmt.Println("recievedHelloReply >> ", string(helloMsg))
-
 		if helloMsg[4] == 254 {
 			length := int(helloMsg[5])<<8 | int(helloMsg[6])
-			fmt.Println(string(helloMsg[7 : 7+length]))
+			fmt.Println("recievedHelloReply >> ", string(helloMsg[7:7+length]))
 			return false
 		}
 		if helloMsg[4] != 128 || !reflect.DeepEqual(helloMsg[0:len(id)], id) {
