@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"sync"
 	"time"
 )
 
@@ -45,9 +46,10 @@ func main() {
 	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
 	IPv4Port := 7554
-	IPv6Port := 7443
+	IPv6Port := 3994
 	sockIpv4, _ := listenUDPIPv4(IPv4Port)
 	sockIpv6, myIPv6Addr := listenUDPIPv6(IPv6Port)
+	var wg sync.WaitGroup
 
 	client := getClient()
 
@@ -63,18 +65,18 @@ func main() {
 	// say hello to SERVER
 	// IPV4
 
+	go replyAllPeers(usernameByte, flag, sizeMsg, privateKey, sockIpv4, &wg)
+	go replyAllPeers(usernameByte, flag, sizeMsg, privateKey, sockIpv6, &wg)
 	datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
 
-	sayHello(datagram, id, sockIpv4, udpServerAddresses[0])
-
-	replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv4)
+	wg.Add(1)
+	sayHello(datagram, id, sockIpv4, udpServerAddresses[0], &wg)
 
 	// IPV6
 
 	if myIPv6Addr.IP != nil {
 		datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
-		sayHello(datagram, id, sockIpv6, udpServerAddresses[1])
-		replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv6)
+		sayHello(datagram, id, sockIpv6, udpServerAddresses[1], &wg)
 
 	}
 
@@ -85,43 +87,41 @@ func main() {
 
 	fmt.Println(string(body))
 
-	body = getRequest(client, "https://jch.irif.fr:8443/peers/jch")
+	// body = getRequest(client, "https://jch.irif.fr:8443/peers/jch")
 
-	var peerInfo peerInfoJson
-	if err := json.Unmarshal(body, &peerInfo); err != nil {
-		log.Fatal(err)
-	}
+	// var peerInfo peerInfoJson
+	// if err := json.Unmarshal(body, &peerInfo); err != nil {
+	// 	log.Fatal(err)
+	// }
 
-	peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
+	// peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
 
-	// IPV4
-	datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
+	// // IPV4
+	// datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
 
-	sayHello(datagram, id, sockIpv4, peerUdpAddresses[0])
-	replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv4)
+	// sayHello(datagram, id, sockIpv4, peerUdpAddresses[0])
 
-	// IPV6
-	datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
+	// // IPV6
+	// datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
 
-	if myIPv6Addr.IP != nil {
-		sayHello(datagram, id, sockIpv6, peerUdpAddresses[1])
-		replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv6)
-	}
+	// if myIPv6Addr.IP != nil {
+	// 	sayHello(datagram, id, sockIpv6, peerUdpAddresses[1])
+	// }
 
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// RootRequest PEER
-	datagram = buildDatagram(id, 1, nil, nil, nil, sizeMsg, nil)
+	// //////////////////////////////////////////////////////////////////////////////////////////////
+	// // RootRequest PEER
+	// datagram = buildDatagram(id, 1, nil, nil, nil, sizeMsg, nil)
 
-	rootRequest(datagram, id, sockIpv4, peerUdpAddresses[0])
+	// rootRequest(datagram, id, sockIpv4, peerUdpAddresses[0])
 
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// send Datum
+	// //////////////////////////////////////////////////////////////////////////////////////////////
+	// // send Datum
 
-	root := datagram[7:39]
-	recursiveMircle(datagram, peerUdpAddresses[0], sockIpv4, root, id, sizeMsg)
+	// root := datagram[7:39]
+	// recursiveMircle(datagram, peerUdpAddresses[0], sockIpv4, root, id, sizeMsg)
 
-	///////////////////////////////////////////////////////
-	// NAT
+	// ///////////////////////////////////////////////////////
+	// // NAT
 
 }
 
@@ -187,12 +187,13 @@ func getRequest(client *http.Client, url string) []byte {
 	return body
 }
 
-func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ecdsa.PrivateKey, sock *net.UDPConn) {
+func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ecdsa.PrivateKey, sock *net.UDPConn, wg *sync.WaitGroup) {
 	if sock == nil {
 		return
 	}
 
 	for {
+		wg.Wait()
 		replyToPeer(usernameByte, flag, sizeMsg, privateKey, sock)
 	}
 }
@@ -203,10 +204,8 @@ func replyToPeer(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ecds
 	}
 	n := 0
 	receivedDatagram := make([]byte, sizeMsg)
-	sock.SetReadDeadline(time.Now().Add(time.Duration(1) * time.Second))
 
 	n, peerUdpAddress, err := sock.ReadFromUDP(receivedDatagram)
-
 	if err != nil {
 		log.Println("ERROR replyAllPeers func >> ", err)
 	}
@@ -228,8 +227,9 @@ func replyToPeer(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ecds
 	}
 }
 
-func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr) {
+func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, wg *sync.WaitGroup) {
 	exponent := 0
+
 	for helloMsg[4] != 128 || !reflect.DeepEqual(helloMsg[0:len(id)], id) {
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
@@ -253,6 +253,7 @@ func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPA
 		sock.SetReadDeadline(time.Now().Add(time.Duration(deadLineTime) * time.Second))
 
 		_, _, err := sock.ReadFromUDP(helloMsg)
+		fmt.Println(helloMsg)
 
 		if err != nil {
 			log.Println("ERROR >>", err)
@@ -260,7 +261,7 @@ func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPA
 
 		sock.SetReadDeadline(time.Time{})
 	}
-
+	wg.Done()
 }
 
 func rootRequest(rootMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr) {
@@ -431,19 +432,24 @@ func getClient() *http.Client {
 }
 
 func getMsgSignature(datagram []byte, privateKey *ecdsa.PrivateKey) []byte {
-	signature := make([]byte, 64)
-	length := int(datagram[5])<<8 | int(datagram[6])
-	hashed := sha256.Sum256(datagram[0 : 7+length])
-	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
+	if privateKey != nil {
+		signature := make([]byte, 64)
+		length := int(datagram[5])<<8 | int(datagram[6])
+		hashed := sha256.Sum256(datagram[0 : 7+length])
+		r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
 
-	if err != nil {
-		log.Fatal(err)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		r.FillBytes(signature[:32])
+		s.FillBytes(signature[32:])
+
+		return signature
 	}
 
-	r.FillBytes(signature[:32])
-	s.FillBytes(signature[32:])
+	return nil
 
-	return signature
 }
 
 func listenUDPIPv6(IPv6Port int) (*net.UDPConn, net.UDPAddr) {
