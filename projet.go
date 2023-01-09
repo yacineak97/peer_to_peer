@@ -15,6 +15,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"time"
 )
@@ -30,204 +31,136 @@ type peerInfoJson struct {
 	Key       string        `json:"key"`
 }
 
-type registerJson struct {
+type nameAndKeyJson struct {
 	Name string `json:"name"`
 	Key  string `json:"key"`
 }
 
 func main() {
 	// var rootMsg []byte
-	var helloMsg []byte
-	name := "com2"
-	username := []byte(name)
+	sizeMsg := 1128
+	datagram := make([]byte, sizeMsg)
+	flag := make([]byte, 4)
+	username := "com4"
+	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
-	length := 9
+	IPv4Port := 7554
+	IPv6Port := 7443
+	sockIpv4, _ := listenUDPIPv4(IPv4Port)
+	sockIpv6, myIPv6Addr := listenUDPIPv6(IPv6Port)
 
-	// Private and Public key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	publicKey, ok := privateKey.Public().(*ecdsa.PublicKey)
-	fmt.Println(ok)
-	formatted := make([]byte, 64)
-	publicKey.X.FillBytes(formatted[:32])
-	publicKey.Y.FillBytes(formatted[32:])
-	keyBase64 := base64.RawStdEncoding.EncodeToString(formatted)
-	fmt.Println(keyBase64)
+	client := getClient()
 
-	transport := &*http.DefaultTransport.(*http.Transport)
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   50 * time.Second,
-	}
+	privateKey, _, keyBase64 := generatePrivateAndPublicKey()
 
-	body := getRequest(client, "https://jch.irif.fr:8443/udp-address")
+	registerInServer(username, keyBase64, client)
 
-	var serverUdpAddr []udpAddrJson
-	if err := json.Unmarshal(body, &serverUdpAddr); err != nil {
-		log.Fatal(err)
-	}
-
-	udpServerAddresses := getUDPAddrArray(serverUdpAddr)
+	udpServerAddresses := getUDPAddrArray(getUdpServerAddrs(client))
 
 	fmt.Println(udpServerAddresses)
 
-	nameKey := []byte(fmt.Sprintf(`{"name":"%s", "key":"%s"}`, name, keyBase64))
-
-	// nameKey := strings.NewReader(`{"name": "computer1"}`)
-
-	req, err := http.NewRequest("POST", "https://jch.irif.fr:8443/register", bytes.NewBuffer(nameKey))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	res, err := client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println(res)
-
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
-	// send hello to SERVER
+	// say hello to SERVER
 	// IPV4
-	addr := net.UDPAddr{
-		Port: 5658,
-		IP:   net.ParseIP("192.168.164.96"),
-	}
 
-	sockIpv4, err := net.ListenUDP("udp", &addr)
-	if err != nil {
-		log.Fatal(err)
-	}
+	datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
 
-	helloMsg = buildDatagram(id, username, nil, 0, length)
-	fmt.Println(helloMsg[:7+length])
-	hashed := sha256.Sum256(helloMsg[0 : 7+length])
-	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
-	signature := make([]byte, 64)
-	r.FillBytes(signature[:32])
-	s.FillBytes(signature[32:])
+	sayHello(datagram, id, sockIpv4, udpServerAddresses[0])
 
-	copy(helloMsg[7+length:], signature)
-
-	helloMsg = helloMsg[:64+7+length]
-	if !recievedHelloReply(helloMsg, id, sockIpv4, udpServerAddresses[0]) {
-		fmt.Println("Didn't receive helloReply from server (IPV4)")
-		return
-	}
-
-	replyAllPeers(username, length, sockIpv4, udpServerAddresses[0])
+	replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv4)
 
 	// IPV6
-	addr = net.UDPAddr{
-		Port: 8564,
-		IP:   net.ParseIP("2a01:cb01:2051:9ab1:7691:8c04:2e37:e85f"),
+
+	if myIPv6Addr.IP != nil {
+		datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
+		sayHello(datagram, id, sockIpv6, udpServerAddresses[1])
+		replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv6)
+
 	}
 
-	sockIpv6, err := net.ListenUDP("udp6", &addr)
-	if err != nil {
+	// /////////////////////////////////////////////////////////////////////////////////////////////////////
+	// say hello to PEER
+
+	body := getRequest(client, "https://jch.irif.fr:8443/peers")
+
+	fmt.Println(string(body))
+
+	body = getRequest(client, "https://jch.irif.fr:8443/peers/jch")
+
+	var peerInfo peerInfoJson
+	if err := json.Unmarshal(body, &peerInfo); err != nil {
 		log.Fatal(err)
 	}
 
-	helloMsg = buildDatagram(id, username, nil, 0, length)
+	peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
 
-	if !recievedHelloReply(helloMsg, id, sockIpv6, udpServerAddresses[1]) {
-		fmt.Println("Didn't receive helloReply from server (IPV6)")
-		return
+	// IPV4
+	datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
+
+	sayHello(datagram, id, sockIpv4, peerUdpAddresses[0])
+	replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv4)
+
+	// IPV6
+	datagram = buildDatagram(id, 0, flag, usernameByte, nil, sizeMsg, privateKey)
+
+	if myIPv6Addr.IP != nil {
+		sayHello(datagram, id, sockIpv6, peerUdpAddresses[1])
+		replyToPeer(usernameByte, flag, sizeMsg, privateKey, sockIpv6)
 	}
 
-	replyAllPeers(username, length, sockIpv6, udpServerAddresses[1])
+	//////////////////////////////////////////////////////////////////////////////////////////////
+	// RootRequest PEER
+	datagram = buildDatagram(id, 1, nil, nil, nil, sizeMsg, nil)
 
-	// /////////////////////////////////////////////////////////////////////////////////////////////////////
-	// // send hello to peer
+	rootRequest(datagram, id, sockIpv4, peerUdpAddresses[0])
 
-	// body = getRequest(client, "https://jch.irif.fr:8443/peers")
+	//////////////////////////////////////////////////////////////////////////////////////////////
+	// send Datum
 
-	// fmt.Println(string(body))
+	root := datagram[7:39]
+	recursiveMircle(datagram, peerUdpAddresses[0], sockIpv4, root, id, sizeMsg)
 
-	// body = getRequest(client, "https://jch.irif.fr:8443/peers/jch")
-
-	// var peerInfo peerInfoJson
-	// if err := json.Unmarshal(body, &peerInfo); err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
-
-	// // IPV4
-
-	// helloMsg = buildDatagram(id, username, nil, 0, length)
-
-	// if !recievedHelloReply(helloMsg, id, sockIpv4, peerUdpAddresses[0]) {
-	// 	fmt.Println("Didn't receive helloReply from jch (IPV4)")
-	// 	return
-	// }
-
-	// replyAllPeers(username, length, sockIpv4, peerUdpAddresses[0])
-
-	// // IPV6
-
-	// helloMsg = buildDatagram(id, username, nil, 0, length)
-
-	// if !recievedHelloReply(helloMsg, id, sockIpv6, peerUdpAddresses[1]) {
-	// 	fmt.Println("Didn't receive helloReply from jch (IPV6)")
-	// 	return
-	// }
-
-	// replyAllPeers(username, length, sockIpv6, peerUdpAddresses[1])
-
-	// //////////////////////////////////////////////////////////////////////////////////////////////
-	// // send RootRequest
-	// rootMsg = buildDatagram(id, nil, nil, 1, 0)
-
-	// if !recieveRoot(rootMsg, id, sockIpv4, peerUdpAddresses[0]) {
-	// 	fmt.Println("Didn't receive helloReply from jch (IPV6)")
-	// 	return
-	// }
-
-	// //////////////////////////////////////////////////////////////////////////////////////////////
-	// // send Datum
-
-	// recursiveMircle(peerUdpAddresses[0], sockIpv4, rootMsg[7:39], id)
-
-	// ///////////////////////////////////////////////////////
-	// // NAT
+	///////////////////////////////////////////////////////
+	// NAT
 
 }
 
-func recursiveMircle(peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte) {
-	datumMsg := buildDatagram(id, nil, hash, 2, 32)
+func recursiveMircle(datagram []byte, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int) {
+	datagram = buildDatagram(id, 2, nil, nil, hash, sizeMsg, nil)
 
-	_, err := sock.WriteToUDP(datumMsg, &peerAddress)
+	_, err := sock.WriteToUDP(datagram, &peerAddress)
 	if err != nil {
 		log.Fatal("sockIpv4.WriteToUDP >> ", err)
 	}
 
 	sock.SetReadDeadline(time.Now().Add(time.Duration(5) * time.Second))
 
-	sock.ReadFromUDP(datumMsg)
+	sock.ReadFromUDP(datagram)
 
-	if datumMsg[39] == 0 {
-		lengthMsg := int(datumMsg[76])<<8 | int(datumMsg[77])
-		a := datumMsg[78 : 78+lengthMsg]
+	if datagram[39] == 0 {
+		lengthMsg := int(datagram[76])<<8 | int(datagram[77])
+		a := datagram[78 : 78+lengthMsg]
+		timestamp := int64(datagram[40])<<24 | int64(datagram[41])<<16 | int64(datagram[42])<<8 | int64(datagram[43])
+		publishDate := time.Unix(timestamp, 0)
 		fmt.Println(string(a))
+		fmt.Println("\tPublished in : ", publishDate)
 		return
 	}
 
-	if datumMsg[4] == 131 {
+	if datagram[4] == 131 {
 		fmt.Println("No Datum")
 		return
 	}
 
-	if datumMsg[39] != 0 && datumMsg[39] != 1 {
+	if datagram[39] != 0 && datagram[39] != 1 {
 		return
 	}
 
-	length := int(datumMsg[5])<<8 | int(datumMsg[6])
-	numberOfHashNodes := len(datumMsg[40:length+7]) / 32
+	length := int(datagram[5])<<8 | int(datagram[6])
+	numberOfHashNodes := len(datagram[40:length+7]) / 32
 	i := 0
 	for i <= numberOfHashNodes {
-		recursiveMircle(peerAddress, sock, datumMsg[40+i*32:40+i*32+32], id)
+		recursiveMircle(datagram, peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg)
 		i += 1
 	}
 }
@@ -254,12 +187,26 @@ func getRequest(client *http.Client, url string) []byte {
 	return body
 }
 
-func replyAllPeers(username []byte, length int, sock *net.UDPConn, udpAddress net.UDPAddr) {
-	// for {
+func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ecdsa.PrivateKey, sock *net.UDPConn) {
+	if sock == nil {
+		return
+	}
+
+	for {
+		replyToPeer(usernameByte, flag, sizeMsg, privateKey, sock)
+	}
+}
+
+func replyToPeer(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ecdsa.PrivateKey, sock *net.UDPConn) {
+	if sock == nil {
+		return
+	}
 	n := 0
-	receivedDatagram := make([]byte, 100)
-	sock.SetReadDeadline(time.Now().Add(time.Duration(2) * time.Second))
-	n, _, err := sock.ReadFromUDP(receivedDatagram)
+	receivedDatagram := make([]byte, sizeMsg)
+	sock.SetReadDeadline(time.Now().Add(time.Duration(1) * time.Second))
+
+	n, peerUdpAddress, err := sock.ReadFromUDP(receivedDatagram)
+
 	if err != nil {
 		log.Println("ERROR replyAllPeers func >> ", err)
 	}
@@ -270,34 +217,32 @@ func replyAllPeers(username []byte, length int, sock *net.UDPConn, udpAddress ne
 
 		// buildDatagram(id, username, nil, 0, length)
 		copy(receivedDatagram[0:3], id)
-		copy(receivedDatagram[4:12], []byte{128, 0, 15, 14, 3, 122, 14, byte(len(username))})
-		copy(receivedDatagram[12:12+len(username)], username)
+		copy(receivedDatagram[4:12], []byte{128, 0, 15, 14, 3, 122, 14, byte(len(usernameByte))})
+		copy(receivedDatagram[12:12+len(usernameByte)], usernameByte)
+		receivedDatagram = buildDatagram(id, 128, flag, usernameByte, nil, sizeMsg, privateKey)
 
-		_, err = sock.WriteToUDP(receivedDatagram, &udpAddress)
+		_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
-
-	// }
-
 }
 
-func recievedHelloReply(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr) bool {
+func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr) {
 	exponent := 0
 	for helloMsg[4] != 128 || !reflect.DeepEqual(helloMsg[0:len(id)], id) {
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
 		if deadLineTime > 64 {
 			fmt.Println("Timeout : No HelloReply Recieved")
-			return false
+			os.Exit(1)
 		}
 
 		if helloMsg[4] == 254 {
 			length := int(helloMsg[5])<<8 | int(helloMsg[6])
 			fmt.Println("recievedHelloReply >> ", string(helloMsg[7:7+length]))
-			return false
 		}
+
 		if helloMsg[4] != 128 || !reflect.DeepEqual(helloMsg[0:len(id)], id) {
 			_, err := sock.WriteToUDP(helloMsg, &udpAddress)
 			if err != nil {
@@ -308,23 +253,24 @@ func recievedHelloReply(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddres
 		sock.SetReadDeadline(time.Now().Add(time.Duration(deadLineTime) * time.Second))
 
 		_, _, err := sock.ReadFromUDP(helloMsg)
+
 		if err != nil {
 			log.Println("ERROR >>", err)
 		}
 
 		sock.SetReadDeadline(time.Time{})
 	}
-	return true
+
 }
 
-func recieveRoot(rootMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr) bool {
+func rootRequest(rootMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr) {
 	exponent := 0
 	for rootMsg[4] != 129 || !reflect.DeepEqual(rootMsg[0:len(id)], id) {
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
 		if deadLineTime > 64 {
 			fmt.Println("Timeout : No Root Recieved")
-			return false
+			os.Exit(1)
 		}
 
 		fmt.Println("recieveRoot >> ", string(rootMsg))
@@ -344,26 +290,36 @@ func recieveRoot(rootMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UD
 		}
 		sock.SetReadDeadline(time.Time{})
 	}
-	return true
 }
 
-func buildDatagram(id []byte, username []byte, hash []byte, typeMsg int, length int) []byte {
+func buildDatagram(id []byte, typeMsg int, flag []byte, usernameByte []byte, hash []byte, sizeMsg int, privateKey *ecdsa.PrivateKey) []byte {
 	if typeMsg == 0 || typeMsg == 128 { // hello or helloReply
-		datagram := make([]byte, 100)
+		datagram := make([]byte, sizeMsg)
+		length := 5 + len(usernameByte)
 		copy(datagram[0:len(id)], id)
 		datagram[4] = byte(typeMsg)
-		copy(datagram[5:12], []byte{byte(length >> 8), byte(length - (length>>8)<<8), 0, 0, 0, 0, byte(len(username))})
-		copy(datagram[12:12+len(username)], username)
+		copy(datagram[5:7], []byte{byte(length >> 8), byte(length - (length>>8)<<8)})
+		copy(datagram[7:11], flag)
+		datagram[11] = byte(len(usernameByte))
+		copy(datagram[12:12+len(usernameByte)], usernameByte)
+
+		signature := getMsgSignature(datagram, privateKey)
+
+		copy(datagram[7+length:], signature)
+
+		datagram = datagram[:64+7+length]
 
 		return datagram
+
 	} else if typeMsg == 1 { // RootRequest message
-		datagram := make([]byte, 200)
+		datagram := make([]byte, sizeMsg)
 		copy(datagram[0:len(id)], id)
 		datagram[4] = byte(typeMsg)
 
 		return datagram
-	} else if typeMsg == 2 { // Datum type message a
-		datagram := make([]byte, 1200)
+
+	} else if typeMsg == 2 { // GetDatum type message
+		datagram := make([]byte, sizeMsg)
 		copy(datagram[0:len(id)], id)
 		datagram[4] = byte(typeMsg)
 		datagram[6] = 32
@@ -389,4 +345,141 @@ func getUDPAddrArray(udpAddrs []udpAddrJson) []net.UDPAddr {
 	}
 
 	return udpAddresses
+}
+
+func getLocalIPv4() net.IP {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP
+}
+
+func getLocalIPv6() net.IP {
+	conn, err := net.Dial("udp6", "[2001:4860:4860:0:0:0:0:8888]:53")
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP
+}
+
+func getUdpServerAddrs(client *http.Client) []udpAddrJson {
+	body := getRequest(client, "https://jch.irif.fr:8443/udp-address")
+
+	var serverUdpAddrsJson []udpAddrJson
+	if err := json.Unmarshal(body, &serverUdpAddrsJson); err != nil {
+		log.Fatal(err)
+	}
+
+	return serverUdpAddrsJson
+}
+
+func registerInServer(name string, keyBase64 string, client *http.Client) {
+	nameAndKey := nameAndKeyJson{
+		Name: name,
+		Key:  keyBase64,
+	}
+
+	body, _ := json.Marshal(nameAndKey)
+
+	req, err := http.NewRequest("POST", "https://jch.irif.fr:8443/register", bytes.NewBuffer(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(res)
+}
+
+func generatePrivateAndPublicKey() (*ecdsa.PrivateKey, *ecdsa.PublicKey, string) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatal(err)
+	}
+	publicKey, ok := privateKey.Public().(*ecdsa.PublicKey)
+	fmt.Println("Private Key generated successfully", ok)
+	formatted := make([]byte, 64)
+	publicKey.X.FillBytes(formatted[:32])
+	publicKey.Y.FillBytes(formatted[32:])
+	keyBase64 := base64.RawStdEncoding.EncodeToString(formatted)
+
+	return privateKey, publicKey, keyBase64
+}
+
+func getClient() *http.Client {
+	transport := &*http.DefaultTransport.(*http.Transport)
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   50 * time.Second,
+	}
+
+	return client
+}
+
+func getMsgSignature(datagram []byte, privateKey *ecdsa.PrivateKey) []byte {
+	signature := make([]byte, 64)
+	length := int(datagram[5])<<8 | int(datagram[6])
+	hashed := sha256.Sum256(datagram[0 : 7+length])
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
+
+	return signature
+}
+
+func listenUDPIPv6(IPv6Port int) (*net.UDPConn, net.UDPAddr) {
+	myIPv6Addr := net.UDPAddr{
+		Port: IPv6Port,
+		IP:   getLocalIPv6(),
+	}
+
+	sockIpv6, err := net.ListenUDP("udp6", &myIPv6Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if myIPv6Addr.IP == nil {
+		sockIpv6.Close()
+		sockIpv6 = nil
+	}
+
+	return sockIpv6, myIPv6Addr
+}
+
+func listenUDPIPv4(IPv4Port int) (*net.UDPConn, net.UDPAddr) {
+	myIPv4Addr := net.UDPAddr{
+		Port: IPv4Port,
+		IP:   getLocalIPv4(),
+	}
+
+	sockIpv4, err := net.ListenUDP("udp", &myIPv4Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if myIPv4Addr.IP == nil {
+		sockIpv4.Close()
+		sockIpv4 = nil
+	}
+
+	return sockIpv4, myIPv4Addr
 }
