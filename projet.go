@@ -206,6 +206,7 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 		if err != nil {
 			log.Println("ERROR replyAllPeers func >> ", err)
 		}
+		sock.SetReadDeadline(time.Time{})
 
 		if receivedDatagram[4] == 128 {
 			channel <- receivedDatagram
@@ -221,8 +222,6 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 
 		if n == 0 || receivedDatagram[4] == 254 {
 			channel <- receivedDatagram
-			duration := time.Duration(1) * time.Second
-			time.Sleep(duration)
 		}
 
 		if n != 0 && receivedDatagram[4] == 0 {
@@ -266,7 +265,7 @@ func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPA
 			}
 		}
 
-		sock.SetReadDeadline(time.Now().Add(time.Duration(deadLineTime) * time.Second))
+		sock.SetReadDeadline(time.Now().Add(time.Duration(int(deadLineTime)) * time.Second))
 
 		helloMsg = <-channel
 
