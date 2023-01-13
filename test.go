@@ -30,7 +30,6 @@ func main() {
 
 	fmt.Println((length >> 8) << 8)
 	fmt.Println(y)
-
 }
 
 func getLocalIPv4() net.IP {
