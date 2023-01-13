@@ -27,12 +27,12 @@ func main() {
 	// fmt.Println(sum)
 
 	var datagrams [][]byte
-	var msgs [33]string
+	var msgs string
 
-	for i := 0; i < 33; i++ {
+	for i := 0; i < 100; i++ {
 		var datagram [1024]byte
-		msgs[i] = "Message " + strconv.Itoa(i+1)
-		datagram = getFormatedMsg(datagram, 0, time.Now().Unix(), nil, []byte(msgs[i]))
+		msgs = "Message " + strconv.Itoa(i+1)
+		datagram = getFormatedMsg(datagram, 0, time.Now().Unix(), nil, []byte(msgs))
 		datagrams = append(datagrams, datagram[:])
 	}
 
@@ -56,7 +56,7 @@ func main() {
 
 	msg := getSons(root, hash)
 
-	fmt.Println(msg)
+	fmt.Println(len(msg))
 
 }
 

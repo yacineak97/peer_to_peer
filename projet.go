@@ -52,29 +52,25 @@ func main() {
 	sizeMsg := 1128
 	datagram := make([]byte, sizeMsg)
 	flag := make([]byte, 4)
-	username := "com3"
+	username := "com"
 	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
-	IPv4Port := 5662
-	IPv6Port := 8764
+	IPv4Port := 2344
+	IPv6Port := 5543
 	sockIpv4, _ := listenUDPIPv4(IPv4Port)
 	sockIpv6, myIPv6Addr := listenUDPIPv6(IPv6Port)
 	channel := make(chan []byte)
 
-	// build my merkel tree
+	// build merkel tree
 
 	myMessagesByte := getMyMessages()
-
 	leaves := getMerkleLeaves(myMessagesByte)
-
 	rootMerkel := buildMerkleTree(leaves)
 
+	/////////////////////////////////////////////////////////////////////////////////////////////////////
 	client := getClient()
-
 	privateKey, _, keyBase64 := generatePrivateAndPublicKey()
-
 	registerInServer(username, keyBase64, client)
-
 	udpServerAddresses := getUDPAddrArray(getUdpServerAddrs(client))
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -104,7 +100,6 @@ func main() {
 	}
 
 	var choosedPeer int
-
 	fmt.Println("Choose a peer")
 	fmt.Scanln(&choosedPeer)
 
@@ -137,55 +132,108 @@ func main() {
 
 	datagram = rootRequest(datagram, id, sockIpv4, peerUdpAddresses[0], channel)
 
-	// datagram = buildDatagram(id, 2, nil, nil, datagram[7:39], sizeMsg, nil)
-
-	// fmt.Println("root", datagram)
-
-	// _, err := sockIpv4.WriteToUDP(datagram, &peerUdpAddresses[0])
-	// if err != nil {
-	// 	log.Fatal("sockIpv4.WriteToUDP >> ", err)
-	// }
-
-	// datagram = <-channel
-
-	// fmt.Println("node", datagram)
-
-	// length := int(datagram[5])<<8 | int(datagram[6])
-
-	// sum := sha256.Sum256(datagram[39 : length+7])
-
-	// fmt.Println(sum)
-
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// send Datum
 
-	root := datagram[7:39]
+	rootPeerHash := datagram[7:39]
 
-	recursiveMircle(datagram, peerUdpAddresses[0], sockIpv4, root, id, sizeMsg, channel)
+	var rootMerkelPeer *Node
+	rootMerkelPeer = new(Node)
+
+	// var rootPeerMercle *Node
+	getMerkleMsgsFromPeer(rootMerkelPeer, datagram, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
+
+	for {
+		datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil)
+		datagram = rootRequest(datagram, id, sockIpv4, peerUdpAddresses[0], channel)
+		newRootPeer := datagram[7:39]
+		if !reflect.DeepEqual(rootPeerHash[:], newRootPeer) {
+			getMerkleMsgsFromPeer(rootMerkelPeer, datagram, peerUdpAddresses[0], sockIpv4, newRootPeer, id, sizeMsg, channel)
+			rootPeerHash = newRootPeer
+		}
+	}
 
 	///////////////////////////////////////////////////////
 	// NAT
 
 }
 
-func recursiveMircle(datagram []byte, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int, channel chan []byte) {
+func getMerkleMsgsFromPeer(node *Node, datagram []byte, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int, channel chan []byte) {
+	exponent := 0
 	datagram = buildDatagram(id, 2, nil, nil, hash, nil, sizeMsg, nil)
 
-	_, err := sock.WriteToUDP(datagram, &peerAddress)
-	if err != nil {
-		log.Fatal("sockIpv4.WriteToUDP >> ", err)
+	for (datagram[4] != 130 || !reflect.DeepEqual(datagram[0:len(id)], id)) &&
+		(datagram[4] != 131 || !reflect.DeepEqual(datagram[0:len(id)], id)) {
+
+		datagram = buildDatagram(id, 2, nil, nil, hash, nil, sizeMsg, nil)
+
+		deadLineTime := math.Pow(2, float64(exponent))
+		exponent += 1
+		if deadLineTime > 64 {
+			fmt.Println("Timeout : Peer not responding")
+			os.Exit(1)
+		}
+
+		if datagram[4] == 254 {
+			length := int(datagram[5])<<8 | int(datagram[6])
+			fmt.Println("getMerkleMsgsFromPeer error >> ", string(datagram[7:7+length]))
+		}
+
+		if (datagram[4] != 130 || !reflect.DeepEqual(datagram[0:len(id)], id)) &&
+			(datagram[4] != 130 || !reflect.DeepEqual(datagram[0:len(id)], id)) {
+			_, err := sock.WriteToUDP(datagram, &peerAddress)
+			if err != nil {
+				log.Fatal("sockIpv4.WriteToUDP >> ", err)
+			}
+		}
+
+		sock.SetReadDeadline(time.Now().Add(time.Duration(int(deadLineTime)) * time.Second))
+		datagram = <-channel
+		sock.SetReadDeadline(time.Time{})
 	}
 
-	datagram = <-channel
+	// verify hash is correct
+	length := int(datagram[5])<<8 | int(datagram[6])
+	calculatedHash := sha256.Sum256(datagram[7+32 : length+7])
+	if !reflect.DeepEqual(datagram[7:7+32], calculatedHash[:]) && datagram[4] != 131 {
+		log.Println("Received wrong hash value from peer")
+		os.Exit(1)
+	}
 
 	if datagram[4] == 130 && datagram[39] == 0 {
-		lengthMsg := int(datagram[76])<<8 | int(datagram[77])
-		msg := datagram[78 : 78+lengthMsg]
-		timestamp := int64(datagram[40])<<24 | int64(datagram[41])<<16 | int64(datagram[42])<<8 | int64(datagram[43])
-		publishDate := time.Unix(timestamp, 0)
-		fmt.Println(string(msg))
-		fmt.Println("\tPublished in : ", publishDate)
-		fmt.Println("\tReplies to ", datagram[44:44+32])
+		if node.hash == new(Node).hash {
+			var hashCorr [32]byte
+			content := datagram[39 : length+7]
+			copy(hashCorr[:], hash)
+
+			node.hash = hashCorr
+			node.content = content
+			node.leaf = true
+
+			lengthMsg := int(datagram[76])<<8 | int(datagram[77])
+			msg := datagram[78 : 78+lengthMsg]
+			timestamp := int64(datagram[40])<<24 | int64(datagram[41])<<16 | int64(datagram[42])<<8 | int64(datagram[43])
+			publishDate := time.Unix(timestamp, 0)
+			fmt.Println(string(msg))
+			fmt.Println("\tPublished in : ", publishDate)
+			fmt.Println("\tReplies to ", datagram[44:44+32])
+
+		} else if !reflect.DeepEqual(node.hash[:], hash) {
+			var hashCorr [32]byte
+			copy(hashCorr[:], hash)
+
+			node.hash = hashCorr
+			node.content = datagram[39 : length+7]
+			node.leaf = true
+
+			lengthMsg := int(datagram[76])<<8 | int(datagram[77])
+			msg := datagram[78 : 78+lengthMsg]
+			timestamp := int64(datagram[40])<<24 | int64(datagram[41])<<16 | int64(datagram[42])<<8 | int64(datagram[43])
+			publishDate := time.Unix(timestamp, 0)
+			fmt.Println(string(msg))
+			fmt.Println("\tPublished in : ", publishDate)
+			fmt.Println("\tReplies to ", datagram[44:44+32])
+		}
 		return
 	}
 
@@ -201,14 +249,53 @@ func recursiveMircle(datagram []byte, peerAddress net.UDPAddr, sock *net.UDPConn
 	if datagram[4] == 130 && datagram[39] == 1 {
 		length := int(datagram[5])<<8 | int(datagram[6])
 		numberOfHashNodes := len(datagram[40:length+7]) / 32
+		if node.hash == new(Node).hash {
+			var hashCorr [32]byte
+			copy(hashCorr[:], hash)
 
-		i := 0
-		for i <= numberOfHashNodes {
-			recursiveMircle(datagram, peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
-			i += 1
+			s := make([]*Node, numberOfHashNodes)
+			for i := range s {
+				s[i] = new(Node)
+			}
+
+			node.hash = hashCorr
+			node.content = datagram[39 : length+7]
+			node.leaf = false
+			node.sons = s
+
+			i := 0
+			for i < numberOfHashNodes {
+
+				getMerkleMsgsFromPeer(node.sons[i], datagram, peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
+
+				i += 1
+			}
+
+		} else if !reflect.DeepEqual(node.hash[:], hash) {
+			var hashCorr [32]byte
+			copy(hashCorr[:], hash)
+
+			node.content = datagram[39 : length+7]
+			node.hash = hashCorr
+			node.leaf = false
+
+			if len(node.sons) < numberOfHashNodes {
+				s := make([]*Node, numberOfHashNodes-len(node.sons))
+				for i := range s {
+					s[i] = new(Node)
+				}
+				node.sons = append(node.sons, s...)
+			}
+
+			i := 0
+			for i < numberOfHashNodes {
+				if !reflect.DeepEqual(node.sons[i].hash[:], datagram[40+i*32:40+i*32+32]) {
+					getMerkleMsgsFromPeer(node.sons[i], datagram, peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
+				}
+				i += 1
+			}
 		}
 	}
-
 }
 
 func buildMerkleTree(nodesDownLevel []*Node) *Node {
@@ -248,16 +335,19 @@ func buildMerkleTree(nodesDownLevel []*Node) *Node {
 
 func getMerkleSons(node *Node, hash [32]byte) []byte {
 	if reflect.DeepEqual(node.hash, hash) {
+
 		return node.content
 	} else {
 
 		for j := 0; j < len(node.sons); j++ {
 			content := getMerkleSons(node.sons[j], hash)
 			if content != nil {
+
 				return content
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -386,7 +476,7 @@ func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPA
 		}
 
 		if helloReplyMsg[4] == 254 {
-			length := int(helloMsg[5])<<8 | int(helloMsg[6])
+			length := int(helloReplyMsg[5])<<8 | int(helloReplyMsg[6])
 			fmt.Println("sayHello error >> ", string(helloMsg[7:7+length]))
 		}
 
@@ -405,9 +495,10 @@ func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPA
 	}
 }
 
-func rootRequest(rootMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) []byte {
+func rootRequest(rootRequestMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) []byte {
 	exponent := 0
-	for rootMsg[4] != 129 || !reflect.DeepEqual(rootMsg[0:len(id)], id) {
+	rootReplyMsg := rootRequestMsg
+	for rootReplyMsg[4] != 129 || !reflect.DeepEqual(rootReplyMsg[0:len(id)], id) {
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
 		if deadLineTime > 64 {
@@ -415,15 +506,13 @@ func rootRequest(rootMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UD
 			os.Exit(1)
 		}
 
-		if rootMsg[4] == 254 {
-			length := int(rootMsg[5])<<8 | int(rootMsg[6])
-			fmt.Println("sayHello error >> ", string(rootMsg[7:7+length]))
+		if rootReplyMsg[4] == 254 {
+			length := int(rootReplyMsg[5])<<8 | int(rootReplyMsg[6])
+			fmt.Println("sayHello error >> ", string(rootReplyMsg[7:7+length]))
 		}
 
-		fmt.Println("recieveRoot >> ", string(rootMsg))
-
-		if rootMsg[4] != 129 || !reflect.DeepEqual(rootMsg[0:len(id)], id) {
-			_, err := sock.WriteToUDP(rootMsg, &udpAddress)
+		if rootReplyMsg[4] != 129 || !reflect.DeepEqual(rootReplyMsg[0:len(id)], id) {
+			_, err := sock.WriteToUDP(rootRequestMsg, &udpAddress)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -431,12 +520,14 @@ func rootRequest(rootMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UD
 
 		sock.SetReadDeadline(time.Now().Add(time.Duration(deadLineTime) * time.Second))
 
-		rootMsg = <-channel
+		rootReplyMsg = <-channel
 
 		sock.SetReadDeadline(time.Time{})
 	}
 
-	return rootMsg
+	// fmt.Println("recieve root merkel from Peer succeed")
+
+	return rootReplyMsg
 }
 
 func buildDatagram(id []byte, typeMsg int, flag []byte, usernameByte []byte, hash []byte, value []byte, sizeMsg int, privateKey *ecdsa.PrivateKey) []byte {
@@ -649,16 +740,23 @@ func listenUDPIPv4(IPv4Port int) (*net.UDPConn, net.UDPAddr) {
 
 func getMyMessages() [][]byte {
 	var myMessagesByte [][]byte
-	var msgs [33]string
 
-	for i := 0; i < 33; i++ {
-		var myMessageByte [1024]byte
-		msgs[i] = "Message " + strconv.Itoa(i+1)
-		myMessageByte = getFormatedMsg(myMessageByte, 0, time.Now().Unix(), nil, []byte(msgs[i]))
+	for i := 0; i < 100; i++ {
+		myMessageByte := getMyMessage(i)
 		myMessagesByte = append(myMessagesByte, myMessageByte[:])
 	}
 
 	return myMessagesByte
+}
+
+func getMyMessage(i int) []byte {
+	var msg string
+	var myMessageByte [1024]byte
+
+	msg = "My message number " + strconv.Itoa(i+1)
+	myMessageByte = getFormatedMsg(myMessageByte, 0, time.Now().Unix(), nil, []byte(msg))
+
+	return myMessageByte[:]
 }
 
 func getFormatedMsg(myMessageByte [1024]byte, typeMsg byte, date int64, inReplyTo []byte, body []byte) [1024]byte {
