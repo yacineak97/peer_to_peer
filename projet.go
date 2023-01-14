@@ -48,107 +48,72 @@ type Node struct {
 }
 
 func main() {
-	// var rootMsg []byte
 	sizeMsg := 1128
 	datagram := make([]byte, sizeMsg)
 	flag := make([]byte, 4)
-	username := "com"
+	username := "com4"
 	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
-	IPv4Port := 2344
-	IPv6Port := 5543
-	sockIpv4, _ := listenUDPIPv4(IPv4Port)
+	IPv4Port := 8777
+	IPv6Port := 7888
+	sockIpv4, myIPv4Addr := listenUDPIPv4(IPv4Port)
 	sockIpv6, myIPv6Addr := listenUDPIPv6(IPv6Port)
 	channel := make(chan []byte)
+	myMsgNumber := 33
+
+	if myIPv4Addr.IP == nil && myIPv6Addr.IP == nil {
+		fmt.Println("No IPv4 and IPv6 address available in your machine ")
+		os.Exit(1)
+	}
 
 	// build merkel tree
-
-	myMessagesByte := getMyMessages()
+	myMessagesByte := getMyMessages(myMsgNumber)
 	leaves := getMerkleLeaves(myMessagesByte)
 	rootMerkel := buildMerkleTree(leaves)
 
-	/////////////////////////////////////////////////////////////////////////////////////////////////////
+	// // that's how to append a message to Merkle tree
+	// messageToAppend := getMyMessage(34)
+	// myMessagesByte = append(myMessagesByte, messageToAppend)
+	// leaves = getMerkleLeaves(myMessagesByte)
+	// rootMerkel = buildMerkleTree(leaves)
+
 	client := getClient()
 	privateKey, _, keyBase64 := generatePrivateAndPublicKey()
 	registerInServer(username, keyBase64, client)
 	udpServerAddresses := getUDPAddrArray(getUdpServerAddrs(client))
 
-	/////////////////////////////////////////////////////////////////////////////////////////////////////
-	// say hello to SERVER
-	// IPV4
-
+	// Reply to every received request from any peer
 	go replyAllPeers(usernameByte, flag, sizeMsg, privateKey, rootMerkel, sockIpv4, channel)
 	go replyAllPeers(usernameByte, flag, sizeMsg, privateKey, rootMerkel, sockIpv6, channel)
+
+	// Say hello to server in IPv4 and IPv6
 	datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey)
+	sayHelloToPeer(datagram, udpServerAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-	sayHello(datagram, id, sockIpv4, udpServerAddresses[0], channel)
+	// choose a peer
+	peerUdpAddresses := getPeerAddresses(client)
 
-	// IPV6
-	if myIPv6Addr.IP != nil {
-		datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey)
-		sayHello(datagram, id, sockIpv6, udpServerAddresses[1], channel)
-
-	}
-
-	body := getRequest(client, "https://jch.irif.fr:8443/peers")
-
-	peerArray := strings.Split(string(body), "\n")
-	peerArray = peerArray[:len(peerArray)-1]
-
-	for i, p := range peerArray {
-		fmt.Println(i+1, "- ", p)
-	}
-
-	var choosedPeer int
-	fmt.Println("Choose a peer")
-	fmt.Scanln(&choosedPeer)
-
-	body = getRequest(client, "https://jch.irif.fr:8443/peers/"+peerArray[choosedPeer-1])
-
-	var peerInfo peerInfoJson
-	if err := json.Unmarshal(body, &peerInfo); err != nil {
-		log.Fatal(err)
-	}
-
-	peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
-
-	// /////////////////////////////////////////////////////////////////////////////////////////////////////
-	// say hello to PEER
-	// IPV4
+	// say hello to peer in IPv4 and IPv6
 	datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey)
+	sayHelloToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-	sayHello(datagram, id, sockIpv4, peerUdpAddresses[0], channel)
-
-	// IPV6
-	datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey)
-
-	if myIPv6Addr.IP != nil {
-		sayHello(datagram, id, sockIpv6, peerUdpAddresses[1], channel)
-	}
-
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// RootRequest PEER
+	// RootRequest peer
 	datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil)
+	datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-	datagram = rootRequest(datagram, id, sockIpv4, peerUdpAddresses[0], channel)
-
-	//////////////////////////////////////////////////////////////////////////////////////////////
 	// send Datum
-
 	rootPeerHash := datagram[7:39]
-
-	var rootMerkelPeer *Node
-	rootMerkelPeer = new(Node)
+	rootMerkelPeer := new(Node)
 
 	// var rootPeerMercle *Node
-	getMerkleMsgsFromPeer(rootMerkelPeer, datagram, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
+	getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
 
 	for {
 		datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil)
-		datagram = rootRequest(datagram, id, sockIpv4, peerUdpAddresses[0], channel)
+		datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 		newRootPeer := datagram[7:39]
 		if !reflect.DeepEqual(rootPeerHash[:], newRootPeer) {
-			getMerkleMsgsFromPeer(rootMerkelPeer, datagram, peerUdpAddresses[0], sockIpv4, newRootPeer, id, sizeMsg, channel)
+			getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, newRootPeer, id, sizeMsg, channel)
 			rootPeerHash = newRootPeer
 		}
 	}
@@ -158,9 +123,9 @@ func main() {
 
 }
 
-func getMerkleMsgsFromPeer(node *Node, datagram []byte, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int, channel chan []byte) {
+func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int, channel chan []byte) {
 	exponent := 0
-	datagram = buildDatagram(id, 2, nil, nil, hash, nil, sizeMsg, nil)
+	datagram := buildDatagram(id, 2, nil, nil, hash, nil, sizeMsg, nil)
 
 	for (datagram[4] != 130 || !reflect.DeepEqual(datagram[0:len(id)], id)) &&
 		(datagram[4] != 131 || !reflect.DeepEqual(datagram[0:len(id)], id)) {
@@ -265,9 +230,7 @@ func getMerkleMsgsFromPeer(node *Node, datagram []byte, peerAddress net.UDPAddr,
 
 			i := 0
 			for i < numberOfHashNodes {
-
-				getMerkleMsgsFromPeer(node.sons[i], datagram, peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
-
+				getMerkleMsgsFromPeer(node.sons[i], peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
 				i += 1
 			}
 
@@ -290,7 +253,7 @@ func getMerkleMsgsFromPeer(node *Node, datagram []byte, peerAddress net.UDPAddr,
 			i := 0
 			for i < numberOfHashNodes {
 				if !reflect.DeepEqual(node.sons[i].hash[:], datagram[40+i*32:40+i*32+32]) {
-					getMerkleMsgsFromPeer(node.sons[i], datagram, peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
+					getMerkleMsgsFromPeer(node.sons[i], peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
 				}
 				i += 1
 			}
@@ -301,12 +264,13 @@ func getMerkleMsgsFromPeer(node *Node, datagram []byte, peerAddress net.UDPAddr,
 func buildMerkleTree(nodesDownLevel []*Node) *Node {
 	var nodeUpLevel []*Node
 
-	emptyNode := &Node{
-		hash: sha256.Sum256([]byte{}),
+	if len(nodesDownLevel) < 1 {
+		fmt.Println("Cannot create merkle tree of empty nodes")
+		return nil
 	}
 
-	if len(nodesDownLevel)%32 == 1 {
-		nodesDownLevel = append(nodesDownLevel, emptyNode)
+	if len(nodesDownLevel) == 1 {
+		return nodesDownLevel[0]
 	}
 
 	for i := 0; i < len(nodesDownLevel); i += 32 {
@@ -328,6 +292,11 @@ func buildMerkleTree(nodesDownLevel []*Node) *Node {
 
 		if len(nodesDownLevel) <= 32 {
 			return nodeNew
+		}
+
+		if len(nodesDownLevel[lastMember+1:]) < 32 {
+			nodeUpLevel = append(nodeUpLevel, nodesDownLevel[lastMember+1:]...)
+			break
 		}
 	}
 	return buildMerkleTree(nodeUpLevel)
@@ -444,9 +413,9 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 			id := receivedDatagram[0:3]
 			copy(requestedHash[:], receivedDatagram[7:7+32])
 
-			merkelSons := getMerkleSons(rootMerkel, requestedHash)
+			nodeContent := getMerkleSons(rootMerkel, requestedHash)
 
-			if merkelSons == nil {
+			if nodeContent == nil {
 				receivedDatagram = buildDatagram(id, 131, nil, nil, requestedHash[:], nil, sizeMsg, nil)
 				_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
 				if err != nil {
@@ -454,11 +423,35 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 				}
 
 			} else {
-				receivedDatagram = buildDatagram(id, 130, nil, nil, requestedHash[:], merkelSons, sizeMsg, nil)
+				receivedDatagram = buildDatagram(id, 130, nil, nil, requestedHash[:], nodeContent, sizeMsg, nil)
 				_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
 				if err != nil {
 					log.Fatal(err)
 				}
+			}
+		}
+	}
+}
+
+func sayHelloToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) {
+	var helloMsg []byte
+	copy(helloMsg[:], datagram[:])
+
+	// IPv4
+	if myIPv4Addr.IP != nil {
+		for _, v := range peerUDPAddresses {
+			if v.IP.To4() != nil {
+				sayHello(datagram, datagram[0:4], sockIpv4, v, channel)
+			}
+		}
+	}
+
+	// IPV6
+	if myIPv6Addr.IP != nil {
+		copy(datagram[:], helloMsg[:])
+		for _, v := range peerUDPAddresses {
+			if v.IP.To16() != nil {
+				sayHello(datagram, datagram[0:4], sockIpv6, v, channel)
 			}
 		}
 	}
@@ -495,6 +488,31 @@ func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPA
 	}
 }
 
+func rootRequestToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) []byte {
+	var rootRequestMsg []byte
+	copy(rootRequestMsg[:], datagram[:])
+	// IPv4
+	if myIPv4Addr.IP != nil {
+		for _, v := range peerUDPAddresses {
+			if v.IP.To4() != nil {
+				datagram = rootRequest(datagram, datagram[0:4], sockIpv4, v, channel)
+			}
+		}
+	}
+
+	// IPV6
+	if myIPv6Addr.IP != nil {
+		copy(datagram[:], rootRequestMsg[:])
+		for _, v := range peerUDPAddresses {
+			if v.IP.To16() != nil {
+				datagram = rootRequest(datagram, datagram[0:4], sockIpv6, v, channel)
+			}
+		}
+	}
+
+	return datagram
+}
+
 func rootRequest(rootRequestMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) []byte {
 	exponent := 0
 	rootReplyMsg := rootRequestMsg
@@ -502,13 +520,13 @@ func rootRequest(rootRequestMsg []byte, id []byte, sock *net.UDPConn, udpAddress
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
 		if deadLineTime > 64 {
-			fmt.Println("Timeout : No Root Recieved")
+			fmt.Println("Timeout : No Response from peer about Root Request")
 			os.Exit(1)
 		}
 
 		if rootReplyMsg[4] == 254 {
 			length := int(rootReplyMsg[5])<<8 | int(rootReplyMsg[6])
-			fmt.Println("sayHello error >> ", string(rootReplyMsg[7:7+length]))
+			fmt.Println("rootRequest error >> ", string(rootReplyMsg[7:7+length]))
 		}
 
 		if rootReplyMsg[4] != 129 || !reflect.DeepEqual(rootReplyMsg[0:len(id)], id) {
@@ -524,8 +542,6 @@ func rootRequest(rootRequestMsg []byte, id []byte, sock *net.UDPConn, udpAddress
 
 		sock.SetReadDeadline(time.Time{})
 	}
-
-	// fmt.Println("recieve root merkel from Peer succeed")
 
 	return rootReplyMsg
 }
@@ -650,7 +666,13 @@ func registerInServer(name string, keyBase64 string, client *http.Client) {
 		log.Fatal(err)
 	}
 
-	fmt.Println(res)
+	if res.StatusCode == 204 {
+		fmt.Printf("Server HelloReply %c \n\n", 0x1F64B)
+	}
+
+	if res.StatusCode == 400 {
+		fmt.Printf("Server already replied you %c \n\n", 0x1F612)
+	}
 }
 
 func generatePrivateAndPublicKey() (*ecdsa.PrivateKey, *ecdsa.PublicKey, string) {
@@ -659,7 +681,11 @@ func generatePrivateAndPublicKey() (*ecdsa.PrivateKey, *ecdsa.PublicKey, string)
 		log.Fatal(err)
 	}
 	publicKey, ok := privateKey.Public().(*ecdsa.PublicKey)
-	fmt.Println("Private Key generated successfully", ok)
+
+	if !ok {
+		log.Fatal("Private Key not generated")
+	}
+
 	formatted := make([]byte, 64)
 	publicKey.X.FillBytes(formatted[:32])
 	publicKey.Y.FillBytes(formatted[32:])
@@ -712,6 +738,7 @@ func listenUDPIPv6(IPv6Port int) (*net.UDPConn, net.UDPAddr) {
 	}
 
 	if myIPv6Addr.IP == nil {
+		fmt.Print("No IPv6 address available in your machine \n\n")
 		sockIpv6.Close()
 		sockIpv6 = nil
 	}
@@ -731,6 +758,7 @@ func listenUDPIPv4(IPv4Port int) (*net.UDPConn, net.UDPAddr) {
 	}
 
 	if myIPv4Addr.IP == nil {
+		fmt.Println("No IPv4 address available in your machine")
 		sockIpv4.Close()
 		sockIpv4 = nil
 	}
@@ -738,10 +766,10 @@ func listenUDPIPv4(IPv4Port int) (*net.UDPConn, net.UDPAddr) {
 	return sockIpv4, myIPv4Addr
 }
 
-func getMyMessages() [][]byte {
+func getMyMessages(myMsgNumber int) [][]byte {
 	var myMessagesByte [][]byte
 
-	for i := 0; i < 100; i++ {
+	for i := 1; i <= myMsgNumber; i++ {
 		myMessageByte := getMyMessage(i)
 		myMessagesByte = append(myMessagesByte, myMessageByte[:])
 	}
@@ -753,7 +781,7 @@ func getMyMessage(i int) []byte {
 	var msg string
 	var myMessageByte [1024]byte
 
-	msg = "My message number " + strconv.Itoa(i+1)
+	msg = "My message number " + strconv.Itoa(i)
 	myMessageByte = getFormatedMsg(myMessageByte, 0, time.Now().Unix(), nil, []byte(msg))
 
 	return myMessageByte[:]
@@ -769,4 +797,30 @@ func getFormatedMsg(myMessageByte [1024]byte, typeMsg byte, date int64, inReplyT
 
 	return myMessageByte
 
+}
+
+func getPeerAddresses(client *http.Client) []net.UDPAddr {
+	body := getRequest(client, "https://jch.irif.fr:8443/peers")
+
+	peersArray := strings.Split(string(body), "\n")
+	peersArray = peersArray[:len(peersArray)-1]
+
+	for i, p := range peersArray {
+		fmt.Println(i+1, "- ", p)
+	}
+
+	var choosedPeer int
+	fmt.Println("\nChoose a peer to connect with")
+	fmt.Scanln(&choosedPeer)
+
+	body = getRequest(client, "https://jch.irif.fr:8443/peers/"+peersArray[choosedPeer-1])
+
+	var peerInfo peerInfoJson
+	if err := json.Unmarshal(body, &peerInfo); err != nil {
+		log.Fatal(err)
+	}
+
+	peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
+
+	return peerUdpAddresses
 }
