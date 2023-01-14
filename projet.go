@@ -62,7 +62,7 @@ func main() {
 	myMsgNumber := 33
 
 	if myIPv4Addr.IP == nil && myIPv6Addr.IP == nil {
-		fmt.Println("No IPv4 and IPv6 address available in your machine ")
+		fmt.Println("No IPv4 and IPv6 address available in your machine")
 		os.Exit(1)
 	}
 
@@ -118,7 +118,6 @@ func main() {
 		}
 	}
 
-	///////////////////////////////////////////////////////
 	// NAT
 
 }
@@ -615,7 +614,8 @@ func getUDPAddrArray(udpAddrs []udpAddrJson) []net.UDPAddr {
 func getLocalIPv4() net.IP {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return nil
 	}
 	defer conn.Close()
 
