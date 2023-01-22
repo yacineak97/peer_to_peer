@@ -53,12 +53,12 @@ func main() {
 	sizeMsg := 1128
 	datagram := make([]byte, sizeMsg)
 	flag := make([]byte, 4)
-	username := "com15"
+	username := "com17"
 	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
 	//idNotSollicited := []byte{0, 0, 0, 0}
-	IPv4Port := 8010
-	IPv6Port := 8010
+	IPv4Port := 8045
+	IPv6Port := 9588
 	sockIpv4, myIPv4Addr := listenUDPIPv4(IPv4Port)
 	sockIpv6, myIPv6Addr := listenUDPIPv6(IPv6Port)
 	channel := make(chan []byte)
@@ -97,95 +97,42 @@ func main() {
 	peerUdpAddresses := getPeerAddresses(client)
 
 	// // say hello to peer in IPv4 and IPv6
-	// datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
-	// sayHelloToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
+	datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
+	sayHelloToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-	// // RootRequest peer
-	// datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
-	// datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
+	// RootRequest peer
+	datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
+	datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-	// // send Datum
-	// rootPeerHash := datagram[7:39]
-	// rootMerkelPeer := new(Node)
+	// send Datum
+	rootPeerHash := datagram[7:39]
+	rootMerkelPeer := new(Node)
 
-	// // var rootPeerMercle *Node
-	// getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
+	// var rootPeerMercle *Node
+	getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
 
-	// for {
-	// 	datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
-	// 	datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
-	// 	newRootPeer := datagram[7:39]
-	// 	if !reflect.DeepEqual(rootPeerHash[:], newRootPeer) {
-	// 		getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, newRootPeer, id, sizeMsg, channel)
-	// 		rootPeerHash = newRootPeer
-	// 	}
-	// }
-
-	// NAT
-
-	datagram = buildDatagram([]byte{0, 0, 0, 0}, 132, nil, nil, nil, nil, sizeMsg, privateKey, &peerUdpAddresses[0])
-
-	// datagram = datagram[:6+64+7]
-
-	fmt.Println(peerUdpAddresses[0])
-	fmt.Println(udpServerAddresses[0])
-
-	sendNatClientToServer(datagram, udpServerAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
-
-	fmt.Println(datagram)
-
-}
-
-func sendNatClientToServer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) {
-	// IPv4
-	if myIPv4Addr.IP != nil {
-
-		for _, v := range peerUDPAddresses {
-			if v.IP.To4() != nil {
-				fmt.Println(v)
-				fmt.Println(" fffff", datagram[:20])
-				sendNatClient(datagram, datagram[0:4], sockIpv4, v, channel)
-			}
+	for {
+		datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
+		datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
+		newRootPeer := datagram[7:39]
+		if !reflect.DeepEqual(rootPeerHash[:], newRootPeer) {
+			getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, newRootPeer, id, sizeMsg, channel)
+			rootPeerHash = newRootPeer
 		}
 	}
 
-	// // IPV6
-	// if myIPv6Addr.IP != nil {
-	// 	for _, v := range peerUDPAddresses {
-	// 		if v.IP.To4() == nil {
-	// 			sendNatClient(datagram, datagram[0:4], sockIpv6, v, channel)
-	// 		}
-	// 	}
-	// }
-}
+	// // NAT
 
-func sendNatClient(natTraversalClient []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) {
-	exponent := 0
-	helloReplyMsg := natTraversalClient
-	for helloReplyMsg[4] != 128 || !reflect.DeepEqual(helloReplyMsg[0:len(id)], id) {
-		deadLineTime := math.Pow(2, float64(exponent))
-		exponent += 1
-		if deadLineTime > 64 {
-			fmt.Println("Timeout : No HelloReply Recieved, Server not responding")
-			os.Exit(1)
-		}
+	// // datagram = datagram[:6+64+7]
 
-		if helloReplyMsg[4] == 254 {
-			length := int(helloReplyMsg[5])<<8 | int(helloReplyMsg[6])
-			fmt.Println("sayHello error >> ", string(helloReplyMsg[7:7+length]))
-		}
+	// peerUdpAddresses = getPeerAddresses(client)
 
-		_, err := sock.WriteToUDP(natTraversalClient, &udpAddress)
-		checkError(err)
+	// datagram = buildDatagram([]byte{0, 0, 0, 0}, 132, nil, nil, nil, nil, sizeMsg, privateKey, &peerUdpAddresses[0])
 
-		sock.SetReadDeadline(time.Now().Add(time.Duration(int(deadLineTime)) * time.Second))
+	// sendNatClientToServer(datagram, udpServerAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-		helloReplyMsg = <-channel
+	// fmt.Println(datagram)
 
-		fmt.Println(helloReplyMsg[:20])
-
-		sock.SetReadDeadline(time.Time{})
-	}
 }
 
 func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int, channel chan []byte) {
@@ -967,5 +914,57 @@ func checkError(err error) {
 func checkOk(ok bool) {
 	if !ok {
 		log.Fatalln("Failed to create the public key")
+	}
+}
+
+func sendNatClientToServer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) {
+	// IPv4
+	if myIPv4Addr.IP != nil {
+
+		for _, v := range peerUDPAddresses {
+			if v.IP.To4() != nil {
+				fmt.Println(v)
+				fmt.Println(" fffff", datagram[:20])
+				sendNatClient(datagram, datagram[0:4], sockIpv4, v, channel)
+			}
+		}
+	}
+
+	// IPV6
+	if myIPv6Addr.IP != nil {
+		for _, v := range peerUDPAddresses {
+			if v.IP.To4() == nil {
+				sendNatClient(datagram, datagram[0:4], sockIpv6, v, channel)
+			}
+		}
+	}
+}
+
+func sendNatClient(natTraversalClient []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) {
+	exponent := 0
+	helloReplyMsg := natTraversalClient
+	for helloReplyMsg[4] != 128 || !reflect.DeepEqual(helloReplyMsg[0:len(id)], id) {
+		deadLineTime := math.Pow(2, float64(exponent))
+		exponent += 1
+		if deadLineTime > 64 {
+			fmt.Println("Timeout : No HelloReply Recieved, Server not responding")
+			os.Exit(1)
+		}
+
+		if helloReplyMsg[4] == 254 {
+			length := int(helloReplyMsg[5])<<8 | int(helloReplyMsg[6])
+			fmt.Println("sayHello error >> ", string(helloReplyMsg[7:7+length]))
+		}
+
+		_, err := sock.WriteToUDP(natTraversalClient, &udpAddress)
+		checkError(err)
+
+		sock.SetReadDeadline(time.Now().Add(time.Duration(int(deadLineTime)) * time.Second))
+
+		helloReplyMsg = <-channel
+
+		fmt.Println(helloReplyMsg[:20])
+
+		sock.SetReadDeadline(time.Time{})
 	}
 }
