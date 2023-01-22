@@ -7,17 +7,19 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -51,9 +53,10 @@ func main() {
 	sizeMsg := 1128
 	datagram := make([]byte, sizeMsg)
 	flag := make([]byte, 4)
-	username := "com4"
+	username := "goVeg"
 	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
+	//idNotSollicited := []byte{0, 0, 0, 0}
 	IPv4Port := 8777
 	IPv6Port := 7888
 	sockIpv4, myIPv4Addr := listenUDPIPv4(IPv4Port)
@@ -62,8 +65,8 @@ func main() {
 	myMsgNumber := 33
 
 	if myIPv4Addr.IP == nil && myIPv6Addr.IP == nil {
-		fmt.Println("No IPv4 and IPv6 address available in your machine")
-		os.Exit(1)
+		fmt.Println("No IPv4 and IPv6 address available on your machine")
+		os.Exit(1) // erreur
 	}
 
 	// build merkel tree
@@ -78,7 +81,7 @@ func main() {
 	// rootMerkel = buildMerkleTree(leaves)
 
 	client := getClient()
-	privateKey, _, keyBase64 := generatePrivateAndPublicKey()
+	_, privateKey, keyBase64 := loadPublicAndPrivateKeys()
 	registerInServer(username, keyBase64, client)
 	udpServerAddresses := getUDPAddrArray(getUdpServerAddrs(client))
 
@@ -124,7 +127,7 @@ func main() {
 
 func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int, channel chan []byte) {
 	exponent := 0
-	datagram := buildDatagram(id, 2, nil, nil, hash, nil, sizeMsg, nil)
+	datagram := buildDatagram(id, 2, nil, nil, hash, nil, sizeMsg, nil) // GetDatum
 
 	for (datagram[4] != 130 || !reflect.DeepEqual(datagram[0:len(id)], id)) &&
 		(datagram[4] != 131 || !reflect.DeepEqual(datagram[0:len(id)], id)) {
@@ -321,39 +324,24 @@ func getMerkleSons(node *Node, hash [32]byte) []byte {
 
 func getMerkleLeaves(datagrams [][]byte) []*Node {
 	var leaves []*Node
-
 	for _, v := range datagrams {
 		node := &Node{
 			hash:    sha256.Sum256(v),
 			leaf:    true,
 			content: v,
 		}
-
 		leaves = append(leaves, node)
 	}
-
 	return leaves
 }
 
 func getRequest(client *http.Client, url string) []byte {
 	req, err := http.NewRequest("GET", url, nil)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	checkError(err)
 	response, err := client.Do(req)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	checkError(err)
 	body, err := ioutil.ReadAll(response.Body)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	checkError(err)
 	return body
 }
 
@@ -392,9 +380,7 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 			receivedDatagram = buildDatagram(id, 128, flag, usernameByte, nil, nil, sizeMsg, privateKey)
 
 			_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
-			if err != nil {
-				log.Fatal(err)
-			}
+			checkError(err)
 		}
 
 		if n != 0 && receivedDatagram[4] == 1 {
@@ -402,9 +388,7 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 			receivedDatagram = buildDatagram(id, 129, nil, nil, rootMerkel.hash[:], nil, sizeMsg, nil)
 
 			_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
-			if err != nil {
-				log.Fatal(err)
-			}
+			checkError(err)
 		}
 
 		if n != 0 && receivedDatagram[4] == 2 {
@@ -417,16 +401,12 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 			if nodeContent == nil {
 				receivedDatagram = buildDatagram(id, 131, nil, nil, requestedHash[:], nil, sizeMsg, nil)
 				_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
-				if err != nil {
-					log.Fatal(err)
-				}
+				checkError(err)
 
 			} else {
 				receivedDatagram = buildDatagram(id, 130, nil, nil, requestedHash[:], nodeContent, sizeMsg, nil)
 				_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
-				if err != nil {
-					log.Fatal(err)
-				}
+				checkError(err)
 			}
 		}
 	}
@@ -470,9 +450,7 @@ func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPA
 
 		if helloReplyMsg[4] != 128 || !reflect.DeepEqual(helloReplyMsg[0:len(id)], id) {
 			_, err := sock.WriteToUDP(helloMsg, &udpAddress)
-			if err != nil {
-				log.Fatal(err)
-			}
+			checkError(err)
 		}
 
 		sock.SetReadDeadline(time.Now().Add(time.Duration(int(deadLineTime)) * time.Second))
@@ -526,9 +504,7 @@ func rootRequest(rootRequestMsg []byte, id []byte, sock *net.UDPConn, udpAddress
 
 		if rootReplyMsg[4] != 129 || !reflect.DeepEqual(rootReplyMsg[0:len(id)], id) {
 			_, err := sock.WriteToUDP(rootRequestMsg, &udpAddress)
-			if err != nil {
-				log.Fatal(err)
-			}
+			checkError(err)
 		}
 
 		sock.SetReadDeadline(time.Now().Add(time.Duration(deadLineTime) * time.Second))
@@ -653,41 +629,18 @@ func registerInServer(name string, keyBase64 string, client *http.Client) {
 	body, _ := json.Marshal(nameAndKey)
 
 	req, err := http.NewRequest("POST", "https://jch.irif.fr:8443/register", bytes.NewBuffer(body))
-	if err != nil {
-		log.Fatal(err)
-	}
+	checkError(err)
 
 	res, err := client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
+	checkError(err)
 
 	if res.StatusCode == 204 {
 		fmt.Printf("Server HelloReply %c \n\n", 0x1F64B)
 	}
 
 	if res.StatusCode == 400 {
-		fmt.Printf("Server already replied you %c \n\n", 0x1F612)
+		fmt.Printf("Error signature not valid %c \n\n", 0x1F612)
 	}
-}
-
-func generatePrivateAndPublicKey() (*ecdsa.PrivateKey, *ecdsa.PublicKey, string) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatal(err)
-	}
-	publicKey, ok := privateKey.Public().(*ecdsa.PublicKey)
-
-	if !ok {
-		log.Fatal("Private Key not generated")
-	}
-
-	formatted := make([]byte, 64)
-	publicKey.X.FillBytes(formatted[:32])
-	publicKey.Y.FillBytes(formatted[32:])
-	keyBase64 := base64.RawStdEncoding.EncodeToString(formatted)
-
-	return privateKey, publicKey, keyBase64
 }
 
 func getClient() *http.Client {
@@ -707,19 +660,23 @@ func getMsgSignature(datagram []byte, privateKey *ecdsa.PrivateKey) []byte {
 		length := int(datagram[5])<<8 | int(datagram[6])
 		hashed := sha256.Sum256(datagram[0 : 7+length])
 		r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
+		checkError(err)
 		r.FillBytes(signature[:32])
 		s.FillBytes(signature[32:])
-
 		return signature
 	}
-
 	return nil
+}
 
+func verifiySignature(datagram []byte, publicKey *ecdsa.PublicKey) bool {
+	var r, s big.Int
+	length := int(datagram[5])<<8 | int(datagram[6])
+	signature := datagram[7+length:]
+	r.SetBytes(signature[:32])
+	s.SetBytes(signature[32:])
+	hashed := sha256.Sum256(datagram[0 : 7+length])
+	ok := ecdsa.Verify(publicKey, hashed[:], &r, &s)
+	return ok
 }
 
 func listenUDPIPv6(IPv6Port int) (*net.UDPConn, net.UDPAddr) {
@@ -729,9 +686,7 @@ func listenUDPIPv6(IPv6Port int) (*net.UDPConn, net.UDPAddr) {
 	}
 
 	sockIpv6, err := net.ListenUDP("udp6", &myIPv6Addr)
-	if err != nil {
-		log.Fatal(err)
-	}
+	checkError(err)
 
 	if myIPv6Addr.IP == nil {
 		fmt.Print("No IPv6 address available in your machine \n\n")
@@ -749,9 +704,7 @@ func listenUDPIPv4(IPv4Port int) (*net.UDPConn, net.UDPAddr) {
 	}
 
 	sockIpv4, err := net.ListenUDP("udp", &myIPv4Addr)
-	if err != nil {
-		log.Fatal(err)
-	}
+	checkError(err)
 
 	if myIPv4Addr.IP == nil {
 		fmt.Println("No IPv4 address available in your machine")
@@ -764,35 +717,29 @@ func listenUDPIPv4(IPv4Port int) (*net.UDPConn, net.UDPAddr) {
 
 func getMyMessages(myMsgNumber int) [][]byte {
 	var myMessagesByte [][]byte
-
 	for i := 1; i <= myMsgNumber; i++ {
 		myMessageByte := getMyMessage(i)
 		myMessagesByte = append(myMessagesByte, myMessageByte[:])
 	}
-
 	return myMessagesByte
 }
 
 func getMyMessage(i int) []byte {
 	var msg string
 	var myMessageByte [1024]byte
-
-	msg = "My message number " + strconv.Itoa(i)
+	msg = "My message number " + fmt.Sprint(i)
 	myMessageByte = getFormatedMsg(myMessageByte, 0, time.Now().Unix(), nil, []byte(msg))
-
 	return myMessageByte[:]
 }
 
 func getFormatedMsg(myMessageByte [1024]byte, typeMsg byte, date int64, inReplyTo []byte, body []byte) [1024]byte {
 	myMessageByte[0] = typeMsg
-	dateByte := []byte{byte(date >> 24), byte(date>>16 - (date>>24)<<8), byte(date>>8 - (date>>16)<<8), byte(date - (date>>24)<<8)}
+	dateByte := []byte{byte(date >> 24), byte(date>>16 - (date>>24)<<8), byte(date>>8 - (date>>16)<<8), byte(date - (date>>8)<<8)}
 	copy(myMessageByte[1:5], dateByte)
 	length := len(body)
 	copy(myMessageByte[37:39], []byte{byte(length >> 8), byte(length - (length>>8)<<8)})
 	copy(myMessageByte[39:], body)
-
 	return myMessageByte
-
 }
 
 func getPeerAddresses(client *http.Client) []net.UDPAddr {
@@ -819,4 +766,83 @@ func getPeerAddresses(client *http.Client) []net.UDPAddr {
 	peerUdpAddresses := getUDPAddrArray(peerInfo.Addresses)
 
 	return peerUdpAddresses
+}
+
+func generatePublicAndPrivateKeys() (*ecdsa.PublicKey, *ecdsa.PrivateKey, string) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	checkError(err)
+	publicKey, ok := privateKey.Public().(*ecdsa.PublicKey)
+	checkOk(ok)
+
+	// Je convertis la cle privee en String
+	x509Encoded, _ := x509.MarshalECPrivateKey(privateKey)
+	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x509Encoded})
+	stringPrivateKey := string(pemEncoded)
+
+	// Je formate la cle publique en 64 octets et je la converstis en String
+	formatted := make([]byte, 64)
+	publicKey.X.FillBytes(formatted[:32])
+	publicKey.Y.FillBytes(formatted[32:])
+	publicKeystring := base64.RawStdEncoding.EncodeToString(formatted)
+
+	// Création d'un fichier sur disque pour conserver la clé publique
+	f1, err := os.Create("public_key.txt")
+	checkError(err)
+	defer f1.Close()
+	_, err = f1.WriteString(publicKeystring)
+	checkError(err)
+	fmt.Println("Key saved to the public key file")
+
+	// Création d'un fichier sur disque pour conserver la clé privée
+	f2, err := os.Create("private_key.txt")
+	checkError(err)
+	defer f2.Close()
+	_, err = f2.WriteString(stringPrivateKey)
+	checkError(err)
+	fmt.Println("Key saved to the private key file")
+
+	// Je retourne les cles publique et privee + le string de la clé publique en 64 bits.
+	return publicKey, privateKey, publicKeystring
+}
+
+func loadPublicAndPrivateKeys() (*ecdsa.PublicKey, *ecdsa.PrivateKey, string) {
+	// Je lie les clés publique et privee depuis leurs fichiers
+	content1, err := os.ReadFile("public_key.txt")
+	content2, err := os.ReadFile("private_key.txt")
+	// En cas d'erreur d'erreur, je regénère de nouvelles clés
+	if err != nil {
+		return generatePublicAndPrivateKeys()
+	}
+	checkError(err)
+	// J'obtiens les clés sous forme de String
+	publicKeyString := string(content1)
+	privateKeyString := string(content2)
+
+	// Je décode la clé privée
+	block, _ := pem.Decode([]byte(privateKeyString))
+	x509Encoded := block.Bytes
+	privateKey, _ := x509.ParseECPrivateKey(x509Encoded)
+
+	// Le décodage de la clé publique est spécial car elle est codée sur 64 bits
+	var x, y big.Int
+	x.SetBytes([]byte(publicKeyString[:32]))
+	y.SetBytes([]byte(publicKeyString[32:]))
+	publicKey := ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     &x,
+		Y:     &y,
+	}
+	return &publicKey, privateKey, publicKeyString
+}
+
+func checkError(err error) {
+	if err != nil {
+		log.Fatalln("Fatal error ", err.Error())
+	}
+}
+
+func checkOk(ok bool) {
+	if !ok {
+		log.Fatalln("Failed to create the public key")
+	}
 }
