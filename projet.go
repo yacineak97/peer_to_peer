@@ -433,9 +433,6 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 }
 
 func sayHelloToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) {
-	var helloMsg []byte
-	copy(helloMsg[:], datagram[:])
-
 	// IPv4
 	if myIPv4Addr.IP != nil {
 		for _, v := range peerUDPAddresses {
@@ -447,7 +444,6 @@ func sayHelloToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *n
 
 	// IPV6
 	if myIPv6Addr.IP != nil {
-		copy(datagram[:], helloMsg[:])
 		for _, v := range peerUDPAddresses {
 			if v.IP.To16() != nil {
 				sayHello(datagram, datagram[0:4], sockIpv6, v, channel)
