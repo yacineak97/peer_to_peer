@@ -54,7 +54,7 @@ func main() {
 	sizeMsg := 1128
 	datagram := make([]byte, sizeMsg)
 	flag := make([]byte, 4)
-	username := "goVeg"
+	username := "com3"
 	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
 	//idUnSigned := []byte{0, 0, 0, 0}
