@@ -96,7 +96,7 @@ func main() {
 	// choose a peer
 	peerUdpAddresses := getPeerAddresses(client)
 
-	// // say hello to peer in IPv4 and IPv6
+	// say hello to peer in IPv4 and IPv6
 	// datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
 	// sayHelloToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
@@ -111,7 +111,7 @@ func main() {
 	// // var rootPeerMercle *Node
 	// getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
 
-	// incremental display of messages
+	// // incremental display of messages
 	// for {
 	// 	datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
 	// 	datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
@@ -122,7 +122,7 @@ func main() {
 	// 	}
 	// }
 
-	// NAT
+	// // NAT
 	ipv4PeerAddr := getIPv4FromIPArray(peerUdpAddresses)
 	datagram = buildDatagram([]byte{0, 0, 0, 0}, 132, nil, nil, nil, nil, sizeMsg, privateKey, &ipv4PeerAddr)
 	sendNatClientToServer(datagram, udpServerAddresses, sockIpv4, myIPv4Addr, channel)
@@ -135,8 +135,8 @@ func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPCon
 	datagram := getDatumDatagram
 
 	// backoff
-	for (datagram[4] != 130 || !reflect.DeepEqual(datagram[0:len(id)], id)) &&
-		(datagram[4] != 131 || !reflect.DeepEqual(datagram[0:len(id)], id)) {
+	for (datagram[4] != 130 || !reflect.DeepEqual(datagram[0:len(id)], id) || ignoreIfNoSignature(datagram, &peerAddress)) &&
+		(datagram[4] != 131 || !reflect.DeepEqual(datagram[0:len(id)], id) || ignoreIfNoSignature(datagram, &peerAddress)) {
 
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
@@ -381,7 +381,7 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 
 		// Send hello after receiving a helloReply, when we work with NAT Traverssal
 		if typeMsg == 128 && reflect.DeepEqual(receivedDatagram[0:4], []byte{0, 0, 0, 0}) {
-			receivedDatagram = buildDatagram([]byte{0, 0, 0, 0}, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
+			receivedDatagram = buildDatagram([]byte{0, 0, 0, 1}, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
 
 			_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
 			checkError(err)
@@ -393,10 +393,11 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 
 		if n != 0 && typeMsg == 0 {
 			id := receivedDatagram[0:3]
-			receivedDatagram = buildDatagram(id, 128, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
 
+			receivedDatagram = buildDatagram(id, 128, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
 			_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
 			checkError(err)
+
 		}
 
 		if n != 0 && typeMsg == 1 {
@@ -450,6 +451,21 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 	}
 }
 
+func ignoreIfNoSignature(receivedDatagram []byte, peerUdpAddress *net.UDPAddr) bool {
+	peerSignature := getSignatureFromMsgPeer(receivedDatagram)
+
+	noSignature := allZeros(peerSignature)
+
+	keyPeer := getPeerKeyFromServer(*peerUdpAddress, getClient())
+
+	if !noSignature && keyPeer != nil {
+		fmt.Println("Message ignored because the peers implements signature but doesn't signed his message")
+		return true
+	}
+
+	return false
+}
+
 func sayHelloToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) {
 	// IPv4
 	if myIPv4Addr.IP != nil {
@@ -473,7 +489,7 @@ func sayHelloToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *n
 func sayHello(helloMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) {
 	exponent := 0
 	helloReplyMsg := helloMsg
-	for helloReplyMsg[4] != 128 || !reflect.DeepEqual(helloReplyMsg[0:len(id)], id) {
+	for helloReplyMsg[4] != 128 || !reflect.DeepEqual(helloReplyMsg[0:len(id)], id) || ignoreIfNoSignature(helloReplyMsg, &udpAddress) {
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
 		if deadLineTime > 64 {
@@ -540,7 +556,7 @@ func getIPv4FromIPArray(peerUDPAddresses []net.UDPAddr) net.UDPAddr {
 func rootRequest(rootRequestMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) []byte {
 	exponent := 0
 	rootReplyMsg := rootRequestMsg
-	for rootReplyMsg[4] != 129 || !reflect.DeepEqual(rootReplyMsg[0:len(id)], id) {
+	for rootReplyMsg[4] != 129 || !reflect.DeepEqual(rootReplyMsg[0:len(id)], id) || ignoreIfNoSignature(rootReplyMsg, &udpAddress) {
 		deadLineTime := math.Pow(2, float64(exponent))
 		exponent += 1
 		if deadLineTime > 64 {
@@ -815,6 +831,44 @@ func getFormatedMsg(myMessageByte [1024]byte, typeMsg byte, date int64, inReplyT
 	copy(myMessageByte[37:39], []byte{byte(length >> 8), byte(length - (length>>8)<<8)})
 	copy(myMessageByte[39:], body)
 	return myMessageByte
+}
+
+func allZeros(s []byte) bool {
+	for _, v := range s {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func getSignatureFromMsgPeer(datagram []byte) []byte {
+	length := int(datagram[5])<<8 | int(datagram[6])
+	return datagram[7+length : 7+length+64]
+}
+
+func getPeerKeyFromServer(peerAddress net.UDPAddr, client *http.Client) []byte {
+	body := getRequest(client, "https://jch.irif.fr:8443/peers")
+
+	peersArray := strings.Split(string(body), "\n")
+	peersArray = peersArray[:len(peersArray)-1]
+
+	for _, p := range peersArray {
+		body = getRequest(client, "https://jch.irif.fr:8443/peers/"+p)
+
+		var peerInfo peerInfoJson
+		if err := json.Unmarshal(body, &peerInfo); err != nil {
+			log.Fatal(err)
+		}
+
+		for _, addr := range peerInfo.Addresses {
+			if reflect.DeepEqual(peerAddress.IP, net.IP(addr.Ip)) && peerAddress.Port == int(addr.Port) && peerInfo.Key != "" {
+				return []byte(peerInfo.Key)
+			}
+		}
+	}
+
+	return nil
 }
 
 func getPeerAddresses(client *http.Client) []net.UDPAddr {
