@@ -53,12 +53,12 @@ func main() {
 	sizeMsg := 1128
 	datagram := make([]byte, sizeMsg)
 	flag := make([]byte, 4)
-	username := "com17"
+	username := "com33"
 	usernameByte := []byte(username)
 	id := []byte{34, 122, 76, 97}
 	//idNotSollicited := []byte{0, 0, 0, 0}
-	IPv4Port := 8045
-	IPv6Port := 9588
+	IPv4Port := 9446
+	IPv6Port := 8996
 	sockIpv4, myIPv4Addr := listenUDPIPv4(IPv4Port)
 	sockIpv6, myIPv6Addr := listenUDPIPv6(IPv6Port)
 	channel := make(chan []byte)
@@ -97,42 +97,35 @@ func main() {
 	peerUdpAddresses := getPeerAddresses(client)
 
 	// // say hello to peer in IPv4 and IPv6
-	datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
-	sayHelloToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
+	// datagram = buildDatagram(id, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
+	// sayHelloToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-	// RootRequest peer
-	datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
-	datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
+	// // RootRequest peer
+	// datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
+	// datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
 
-	// send Datum
-	rootPeerHash := datagram[7:39]
-	rootMerkelPeer := new(Node)
+	// // send Datum
+	// rootPeerHash := datagram[7:39]
+	// rootMerkelPeer := new(Node)
 
-	// var rootPeerMercle *Node
-	getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
+	// // var rootPeerMercle *Node
+	// getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, rootPeerHash, id, sizeMsg, channel)
 
-	for {
-		datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
-		datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
-		newRootPeer := datagram[7:39]
-		if !reflect.DeepEqual(rootPeerHash[:], newRootPeer) {
-			getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, newRootPeer, id, sizeMsg, channel)
-			rootPeerHash = newRootPeer
-		}
-	}
+	// incremental display of messages
+	// for {
+	// 	datagram = buildDatagram(id, 1, nil, nil, nil, nil, sizeMsg, nil, nil)
+	// 	datagram = rootRequestToPeer(datagram, peerUdpAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
+	// 	newRootPeer := datagram[7:39]
+	// 	if !reflect.DeepEqual(rootPeerHash[:], newRootPeer) {
+	// 		getMerkleMsgsFromPeer(rootMerkelPeer, peerUdpAddresses[0], sockIpv4, newRootPeer, id, sizeMsg, channel)
+	// 		rootPeerHash = newRootPeer
+	// 	}
+	// }
 
-	// // NAT
-
-	// // datagram = datagram[:6+64+7]
-
-	// peerUdpAddresses = getPeerAddresses(client)
-
-	// datagram = buildDatagram([]byte{0, 0, 0, 0}, 132, nil, nil, nil, nil, sizeMsg, privateKey, &peerUdpAddresses[0])
-
-	// sendNatClientToServer(datagram, udpServerAddresses, sockIpv4, myIPv4Addr, sockIpv6, myIPv6Addr, channel)
-
-	// fmt.Println(datagram)
-
+	// NAT
+	ipv4PeerAddr := getIPv4FromIPArray(peerUdpAddresses)
+	datagram = buildDatagram([]byte{0, 0, 0, 0}, 132, nil, nil, nil, nil, sizeMsg, privateKey, &ipv4PeerAddr)
+	sendNatClientToServer(datagram, udpServerAddresses, sockIpv4, myIPv4Addr, channel)
 }
 
 func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPConn, hash []byte, id []byte, sizeMsg int, channel chan []byte) {
@@ -175,7 +168,9 @@ func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPCon
 		os.Exit(1)
 	}
 
+	// if we receive datagram with type 0 (datagram[39] == 0) that means it's a message, so here we will create the leaf that point to that message in our tree merkel struct
 	if datagram[4] == 130 && datagram[39] == 0 {
+		// this condition is used whenever the message is recieved for the first time, then we add it to our tree merkel struct
 		if node.hash == new(Node).hash {
 			var hashCorr [32]byte
 			content := datagram[39 : length+7]
@@ -193,6 +188,7 @@ func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPCon
 			fmt.Println("\tPublished in : ", publishDate)
 			fmt.Println("\tReplies to ", datagram[44:44+32])
 
+			// this condition is used whenever the message exist in our merkel tree struct, but it has been modified
 		} else if !reflect.DeepEqual(node.hash[:], hash) {
 			var hashCorr [32]byte
 			copy(hashCorr[:], hash)
@@ -217,13 +213,17 @@ func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPCon
 		return
 	}
 
+	// if the type of the received datagram is different then 0 or 1, we just ignore the message
 	if datagram[4] == 130 && datagram[39] != 0 && datagram[39] != 1 {
 		return
 	}
 
+	// if we receive datagram with type 1 (datagram[39] == 1) that means it's an internal node, so here we will add the node to our tree merkel struct
 	if datagram[4] == 130 && datagram[39] == 1 {
 		length := int(datagram[5])<<8 | int(datagram[6])
 		numberOfHashNodes := len(datagram[40:length+7]) / 32
+
+		// this condition is used to fill our tree merkel struct for the first time we receive it, or a new node added to the remote tree merkel, then we add that node to our tree merkel
 		if node.hash == new(Node).hash {
 			var hashCorr [32]byte
 			copy(hashCorr[:], hash)
@@ -240,10 +240,12 @@ func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPCon
 
 			i := 0
 			for i < numberOfHashNodes {
+				// here we make this recursive call to get the nodes of the sons
 				getMerkleMsgsFromPeer(node.sons[i], peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
 				i += 1
 			}
 
+			// this condition is used whenever the node exist in our tree merkel struct but its hash has been changed, so we have to download the changes
 		} else if !reflect.DeepEqual(node.hash[:], hash) {
 			var hashCorr [32]byte
 			copy(hashCorr[:], hash)
@@ -263,6 +265,7 @@ func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPCon
 			i := 0
 			for i < numberOfHashNodes {
 				if !reflect.DeepEqual(node.sons[i].hash[:], datagram[40+i*32:40+i*32+32]) {
+					// here we make this recursive call to get the nodes of the sons
 					getMerkleMsgsFromPeer(node.sons[i], peerAddress, sock, datagram[40+i*32:40+i*32+32], id, sizeMsg, channel)
 				}
 				i += 1
@@ -271,6 +274,7 @@ func getMerkleMsgsFromPeer(node *Node, peerAddress net.UDPAddr, sock *net.UDPCon
 	}
 }
 
+// this function creates our own tree merkel, we have to pass to that function the first time the leaves
 func buildMerkleTree(nodesDownLevel []*Node) *Node {
 	var nodeUpLevel []*Node
 
@@ -309,6 +313,7 @@ func buildMerkleTree(nodesDownLevel []*Node) *Node {
 			break
 		}
 	}
+
 	return buildMerkleTree(nodeUpLevel)
 }
 
@@ -321,7 +326,6 @@ func getMerkleSons(node *Node, hash [32]byte) []byte {
 		for j := 0; j < len(node.sons); j++ {
 			content := getMerkleSons(node.sons[j], hash)
 			if content != nil {
-
 				return content
 			}
 		}
@@ -360,32 +364,34 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 
 	for {
 		receivedDatagram := make([]byte, sizeMsg)
-		sock.SetReadDeadline(time.Now().Add(time.Duration(5) * time.Second))
 
 		n, peerUdpAddress, err := sock.ReadFromUDP(receivedDatagram)
 
 		if err != nil {
 			log.Println("ERROR replyAllPeers func >> ", err)
 		}
+
 		sock.SetReadDeadline(time.Time{})
 
-		if receivedDatagram[4] == 128 {
+		typeMsg := receivedDatagram[4]
+
+		if typeMsg == 128 || typeMsg == 133 || typeMsg == 129 || typeMsg == 130 || typeMsg == 131 || typeMsg == 254 || n == 0 {
 			channel <- receivedDatagram
 		}
 
-		if receivedDatagram[4] == 129 {
+		// Send hello after receiving a helloReply, when we work with NAT Traverssal
+		if typeMsg == 128 && reflect.DeepEqual(receivedDatagram[0:4], []byte{0, 0, 0, 0}) {
+			receivedDatagram = buildDatagram([]byte{0, 0, 0, 0}, 0, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
+
+			_, err = sock.WriteToUDP(receivedDatagram, peerUdpAddress)
+			checkError(err)
+
+			fmt.Println("NAT Traversal: hello sent to peer")
+
 			channel <- receivedDatagram
 		}
 
-		if receivedDatagram[4] == 130 || receivedDatagram[4] == 131 {
-			channel <- receivedDatagram
-		}
-
-		if n == 0 || receivedDatagram[4] == 254 {
-			channel <- receivedDatagram
-		}
-
-		if n != 0 && receivedDatagram[4] == 0 {
+		if n != 0 && typeMsg == 0 {
 			id := receivedDatagram[0:3]
 			receivedDatagram = buildDatagram(id, 128, flag, usernameByte, nil, nil, sizeMsg, privateKey, nil)
 
@@ -393,7 +399,7 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 			checkError(err)
 		}
 
-		if n != 0 && receivedDatagram[4] == 1 {
+		if n != 0 && typeMsg == 1 {
 			id := receivedDatagram[0:3]
 			receivedDatagram = buildDatagram(id, 129, nil, nil, rootMerkel.hash[:], nil, sizeMsg, nil, nil)
 
@@ -401,7 +407,7 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 			checkError(err)
 		}
 
-		if n != 0 && receivedDatagram[4] == 2 {
+		if n != 0 && typeMsg == 2 {
 			var requestedHash [32]byte
 			id := receivedDatagram[0:3]
 			copy(requestedHash[:], receivedDatagram[7:7+32])
@@ -421,7 +427,7 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 		}
 
 		// reply to NAT Traversal Server
-		if n != 0 && receivedDatagram[4] == 133 {
+		if n != 0 && typeMsg == 133 {
 			if receivedDatagram[6] == 6 { // means IPv4
 				id := receivedDatagram[0:3]
 				peerUdpAddress.IP = net.IP.To4(receivedDatagram[7:11])
@@ -447,7 +453,6 @@ func replyAllPeers(usernameByte []byte, flag []byte, sizeMsg int, privateKey *ec
 func sayHelloToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) {
 	// IPv4
 	if myIPv4Addr.IP != nil {
-
 		for _, v := range peerUDPAddresses {
 			if v.IP.To4() != nil {
 				sayHello(datagram, datagram[0:4], sockIpv4, v, channel)
@@ -515,6 +520,21 @@ func rootRequestToPeer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4
 	}
 
 	return datagram
+}
+
+func getIPv4FromIPArray(peerUDPAddresses []net.UDPAddr) net.UDPAddr {
+	for _, v := range peerUDPAddresses {
+		if v.IP.To4() != nil {
+			return v
+		}
+	}
+
+	emptyIP := net.UDPAddr{
+		Port: 0,
+		IP:   nil,
+	}
+
+	return emptyIP
 }
 
 func rootRequest(rootRequestMsg []byte, id []byte, sock *net.UDPConn, udpAddress net.UDPAddr, channel chan []byte) []byte {
@@ -917,24 +937,13 @@ func checkOk(ok bool) {
 	}
 }
 
-func sendNatClientToServer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, sockIpv6 *net.UDPConn, myIPv6Addr net.UDPAddr, channel chan []byte) {
+func sendNatClientToServer(datagram []byte, peerUDPAddresses []net.UDPAddr, sockIpv4 *net.UDPConn, myIPv4Addr net.UDPAddr, channel chan []byte) {
 	// IPv4
 	if myIPv4Addr.IP != nil {
 
 		for _, v := range peerUDPAddresses {
 			if v.IP.To4() != nil {
-				fmt.Println(v)
-				fmt.Println(" fffff", datagram[:20])
 				sendNatClient(datagram, datagram[0:4], sockIpv4, v, channel)
-			}
-		}
-	}
-
-	// IPV6
-	if myIPv6Addr.IP != nil {
-		for _, v := range peerUDPAddresses {
-			if v.IP.To4() == nil {
-				sendNatClient(datagram, datagram[0:4], sockIpv6, v, channel)
 			}
 		}
 	}
@@ -963,8 +972,12 @@ func sendNatClient(natTraversalClient []byte, id []byte, sock *net.UDPConn, udpA
 
 		helloReplyMsg = <-channel
 
-		fmt.Println(helloReplyMsg[:20])
+		fmt.Println(helloReplyMsg[:100])
 
 		sock.SetReadDeadline(time.Time{})
 	}
+
+	// wait until sending hello to peer after we received the helloReply from him
+
+	helloReplyMsg = <-channel
 }
